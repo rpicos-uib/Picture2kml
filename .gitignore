@@ -16,3 +16,6 @@ __pycache__/
 *.heic
 *.HEIC
 *.heif
+
+# Documentation images (made from sample data)
+!docs/images/*.png
