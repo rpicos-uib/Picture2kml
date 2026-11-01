@@ -133,6 +133,72 @@ class EndToEndTest(unittest.TestCase):
         names = [p.findtext("kml:name", namespaces=NS) for p in self.placemarks()]
         self.assertEqual(names, ["c.jpg", "b.jpg", "a.jpg"])
 
+    def test_sorted_by_actual_time_across_utc_offsets(self):
+        tags = {"latitude": ("N", (39, 0, 0)), "longitude": ("E", (2, 0, 0))}
+        # 10:00+02:00 is 08:00 UTC, which is before 09:00+00:00.
+        save_picture(self.directory / "a.jpg", **tags, taken="2024:05:17 09:00:00", offset="+00:00")
+        save_picture(self.directory / "b.jpg", **tags, taken="2024:05:17 10:00:00", offset="+02:00")
+        self.run_main()
+        names = [p.findtext("kml:name", namespaces=NS) for p in self.placemarks()]
+        self.assertEqual(names, ["b.jpg", "a.jpg"])
+
+    def save_trip(self):
+        save_picture(
+            self.directory / "second.jpg",
+            latitude=("N", (40, 0, 0)),
+            longitude=("E", (3, 0, 0)),
+            taken="2024:05:18 10:00:00",
+        )
+        save_picture(
+            self.directory / "first.jpg",
+            latitude=("N", (39, 0, 0)),
+            longitude=("E", (2, 0, 0)),
+            altitude=10,
+            taken="2024:05:17 10:00:00",
+        )
+        save_picture(
+            self.directory / "undated.jpg",
+            latitude=("N", (41, 0, 0)),
+            longitude=("E", (4, 0, 0)),
+        )
+
+    def line(self):
+        root = ET.parse(self.directory / "photos.kml").getroot()
+        return root.find(".//kml:LineString/kml:coordinates", NS)
+
+    def test_no_path_by_default(self):
+        self.save_trip()
+        self.run_main()
+        self.assertIsNone(self.line())
+
+    def test_path_follows_capture_order_and_skips_undated(self):
+        self.save_trip()
+        status, stdout, _ = self.run_main("--path")
+        self.assertEqual(status, 0)
+        self.assertEqual(self.line().text, "2.0000000,39.0000000,10.0 3.0000000,40.0000000")
+        self.assertIn("1 undated pictures left out of the path", stdout)
+        names = [p.findtext("kml:name", namespaces=NS) for p in self.placemarks()]
+        self.assertEqual(names, ["Path", "first.jpg", "second.jpg", "undated.jpg"])
+
+    def test_path_only_has_no_points(self):
+        self.save_trip()
+        self.assertEqual(self.run_main("--path-only")[0], 0)
+        [placemark] = self.placemarks()
+        self.assertEqual(placemark.findtext("kml:name", namespaces=NS), "Path")
+        self.assertIsNone(placemark.find(".//kml:Point", NS))
+
+    def test_path_needs_two_dated_pictures(self):
+        save_picture(
+            self.directory / "only.jpg",
+            latitude=("N", (39, 0, 0)),
+            longitude=("E", (2, 0, 0)),
+            taken="2024:05:17 10:00:00",
+        )
+        status, _, stderr = self.run_main("--path")
+        self.assertEqual(status, 1)
+        self.assertIn("at least 2", stderr)
+        self.assertFalse((self.directory / "photos.kml").exists())
+
     def test_unusual_files_are_reported_not_fatal(self):
         save_picture(
             self.directory / "R&D <1>.JPG",

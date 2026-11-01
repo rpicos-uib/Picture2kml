@@ -70,6 +70,8 @@ The same trip, numbered in the order the pictures were taken:
 | `-o`, `--output FILE` | KML file to write (default: `photos.kml` inside the directory) |
 | `-r`, `--recursive` | Also search subdirectories |
 | `-t`, `--title TEXT` | Document title (default: the directory name) |
+| `-p`, `--path` | Also draw a line through the pictures in capture order |
+| `--path-only` | Draw the line without the individual placemarks |
 
 For example, to process a folder and all its subfolders and write the result
 somewhere else:
@@ -78,8 +80,19 @@ somewhere else:
 python picture2kml.py ~/Pictures/2025 --recursive --output ~/maps/2025.kml
 ```
 
-The exit status is 0 on success, 1 if no geotagged pictures were found (no file
-is written), and 2 if the directory does not exist.
+To draw your route as a line:
+
+```bash
+python picture2kml.py ~/Pictures/mallorca-trip --path
+```
+
+The line joins the pictures with straight segments in capture order, so it shows
+where you took pictures rather than the exact way you travelled. Pictures without
+a capture date are left out of it, because their place in the sequence is unknown.
+
+The exit status is 0 on success, 1 if nothing could be written (no geotagged
+pictures, or fewer than 2 dated pictures for a path), and 2 if the directory does
+not exist.
 
 ## What the KML contains
 

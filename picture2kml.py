@@ -8,7 +8,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +35,8 @@ GPS_LONGITUDE_REF = 3
 GPS_LONGITUDE = 4
 GPS_ALTITUDE_REF = 5
 GPS_ALTITUDE = 6
+PATH_COLOR = "ff0055ff"  # KML colors are aabbggrr: opaque orange
+PATH_WIDTH = "3"
 
 # Only metadata is read, so the size limit against huge decoded images does not
 # apply, and it would otherwise reject large panoramas.
@@ -140,13 +142,52 @@ def describe(photo: Photo, directory: Path) -> str:
     return "<br/>".join(lines)
 
 
-def build_kml(photos: list, directory: Path, title: str) -> ET.ElementTree:
+def sort_key(photo: Photo) -> tuple:
+    """Order by capture time, comparing UTC when the offset is known; undated go last."""
+    if photo.taken is None:
+        return (True, datetime.min, photo.path)
+    taken = datetime.fromisoformat(photo.taken)
+    if taken.tzinfo is not None:
+        taken = taken.astimezone(timezone.utc).replace(tzinfo=None)
+    return (False, taken, photo.path)
+
+
+def format_coordinates(photo: Photo) -> str:
+    coordinates = f"{photo.longitude:.7f},{photo.latitude:.7f}"
+    if photo.altitude is not None:
+        coordinates += f",{photo.altitude:.1f}"
+    return coordinates
+
+
+def add_path(document: ET.Element, photos: list) -> None:
+    placemark = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
+    ET.SubElement(placemark, f"{{{KML_NS}}}name").text = "Path"
+    ET.SubElement(placemark, f"{{{KML_NS}}}description").text = (
+        f"Through {len(photos)} pictures in capture order"
+    )
+    style = ET.SubElement(placemark, f"{{{KML_NS}}}Style")
+    line_style = ET.SubElement(style, f"{{{KML_NS}}}LineStyle")
+    ET.SubElement(line_style, f"{{{KML_NS}}}color").text = PATH_COLOR
+    ET.SubElement(line_style, f"{{{KML_NS}}}width").text = PATH_WIDTH
+    line = ET.SubElement(placemark, f"{{{KML_NS}}}LineString")
+    ET.SubElement(line, f"{{{KML_NS}}}tessellate").text = "1"
+    ET.SubElement(line, f"{{{KML_NS}}}coordinates").text = " ".join(
+        format_coordinates(photo) for photo in photos
+    )
+
+
+def build_kml(
+    photos: list, directory: Path, title: str, path_photos: list = (), points: bool = True
+) -> ET.ElementTree:
     ET.register_namespace("", KML_NS)
     kml = ET.Element(f"{{{KML_NS}}}kml")
     document = ET.SubElement(kml, f"{{{KML_NS}}}Document")
     ET.SubElement(document, f"{{{KML_NS}}}name").text = title
 
-    for photo in photos:
+    if path_photos:
+        add_path(document, path_photos)
+
+    for photo in photos if points else ():
         placemark = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
         ET.SubElement(placemark, f"{{{KML_NS}}}name").text = photo.path.name
         ET.SubElement(placemark, f"{{{KML_NS}}}description").text = describe(photo, directory)
@@ -154,10 +195,7 @@ def build_kml(photos: list, directory: Path, title: str) -> ET.ElementTree:
             timestamp = ET.SubElement(placemark, f"{{{KML_NS}}}TimeStamp")
             ET.SubElement(timestamp, f"{{{KML_NS}}}when").text = photo.taken
         point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
-        coordinates = f"{photo.longitude:.7f},{photo.latitude:.7f}"
-        if photo.altitude is not None:
-            coordinates += f",{photo.altitude:.1f}"
-        ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = coordinates
+        ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = format_coordinates(photo)
 
     tree = ET.ElementTree(kml)
     ET.indent(tree)
@@ -177,6 +215,16 @@ def parse_args(argv=None) -> argparse.Namespace:
         "-r", "--recursive", action="store_true", help="also search subdirectories"
     )
     parser.add_argument("-t", "--title", help="document title (default: the directory name)")
+    path = parser.add_mutually_exclusive_group()
+    path.add_argument(
+        "-p",
+        "--path",
+        action="store_true",
+        help="also draw a line through the pictures in capture order",
+    )
+    path.add_argument(
+        "--path-only", action="store_true", help="draw the line without the placemarks"
+    )
     return parser.parse_args(argv)
 
 
@@ -216,10 +264,22 @@ def main(argv=None) -> int:
         print("error: no geotagged pictures found, no KML written", file=sys.stderr)
         return 1
 
-    # ISO strings sort chronologically; undated photos go last.
-    photos.sort(key=lambda photo: (photo.taken is None, photo.taken or "", photo.path))
+    photos.sort(key=sort_key)
+
+    path_photos = []
+    if args.path or args.path_only:
+        # Undated pictures have no known position in the sequence.
+        path_photos = [photo for photo in photos if photo.taken]
+        if len(path_photos) < 2:
+            print("error: a path needs at least 2 pictures with a date", file=sys.stderr)
+            return 1
+        if len(path_photos) < len(photos):
+            print(f"{len(photos) - len(path_photos)} undated pictures left out of the path")
+
     output = args.output or directory / "photos.kml"
-    tree = build_kml(photos, directory, args.title or directory.name)
+    tree = build_kml(
+        photos, directory, args.title or directory.name, path_photos, not args.path_only
+    )
     tree.write(output, encoding="UTF-8", xml_declaration=True)
     print(f"wrote {output}")
     return 0
