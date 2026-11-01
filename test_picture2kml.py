@@ -199,6 +199,64 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("at least 2", stderr)
         self.assertFalse((self.directory / "photos.kml").exists())
 
+    def save_near_duplicates(self):
+        points = {
+            "start.jpg": ((0, 0), "10:00:00"),
+            "soon.jpg": ((0, 1), "10:00:05"),  # 5 s after start, 31 m away
+            "near.jpg": ((0, 0.2), "10:05:00"),  # 5 min after start, 6 m away
+            "end.jpg": ((1, 0), "10:10:00"),  # far in time and space
+        }
+        for name, ((minutes, seconds), time) in points.items():
+            save_picture(
+                self.directory / name,
+                latitude=("N", (39, minutes, seconds)),
+                longitude=("E", (2, 0, 0)),
+                taken=f"2024:05:17 {time}",
+            )
+
+    def test_simplify_drops_points_close_in_time_or_space(self):
+        self.save_near_duplicates()
+        status, stdout, _ = self.run_main("--path", "--simplify")
+        self.assertEqual(status, 0)
+        self.assertIn("path simplified from 4 to 2 pictures", stdout)
+        self.assertEqual(self.line().text, "2.0000000,39.0000000 2.0000000,39.0166667")
+        # Every picture keeps its own placemark.
+        self.assertEqual(len(self.placemarks()), 5)
+
+    def test_simplify_thresholds_can_be_changed(self):
+        self.save_near_duplicates()
+        self.run_main("--path", "-s", "--min-seconds", "1", "--min-meters", "1")
+        self.assertEqual(len(self.line().text.split()), 4)
+
+    def test_simplify_compares_with_last_kept_picture(self):
+        for i in range(4):
+            save_picture(
+                self.directory / f"{i}.jpg",
+                latitude=("N", (39, 0, 0.2 * i)),  # about 6 m per picture
+                longitude=("E", (2, 0, 0)),
+                taken=f"2024:05:17 10:0{i}:00",
+            )
+        self.run_main("--path", "--simplify")
+        self.assertEqual(len(self.line().text.split()), 2)
+
+    def test_simplify_to_one_point_writes_nothing(self):
+        for name, time in (("a.jpg", "10:00:00"), ("b.jpg", "10:00:05")):
+            save_picture(
+                self.directory / name,
+                latitude=("N", (39, 0, 0)),
+                longitude=("E", (2, 0, 0)),
+                taken=f"2024:05:17 {time}",
+            )
+        status, _, stderr = self.run_main("--path", "--simplify")
+        self.assertEqual(status, 1)
+        self.assertIn("at least 2", stderr)
+        self.assertFalse((self.directory / "photos.kml").exists())
+
+    def test_simplify_requires_a_path(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_main("--simplify")
+        self.assertEqual(caught.exception.code, 2)
+
     def test_unusual_files_are_reported_not_fatal(self):
         save_picture(
             self.directory / "R&D <1>.JPG",

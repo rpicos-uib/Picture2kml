@@ -37,6 +37,7 @@ GPS_ALTITUDE_REF = 5
 GPS_ALTITUDE = 6
 PATH_COLOR = "ff0055ff"  # KML colors are aabbggrr: opaque orange
 PATH_WIDTH = "3"
+EARTH_RADIUS_METERS = 6371008.8
 
 # Only metadata is read, so the size limit against huge decoded images does not
 # apply, and it would otherwise reject large panoramas.
@@ -142,14 +143,41 @@ def describe(photo: Photo, directory: Path) -> str:
     return "<br/>".join(lines)
 
 
-def sort_key(photo: Photo) -> tuple:
-    """Order by capture time, comparing UTC when the offset is known; undated go last."""
-    if photo.taken is None:
-        return (True, datetime.min, photo.path)
+def comparable_time(photo: Photo) -> datetime:
+    """Return the capture time, converted to UTC when the offset is known."""
     taken = datetime.fromisoformat(photo.taken)
     if taken.tzinfo is not None:
         taken = taken.astimezone(timezone.utc).replace(tzinfo=None)
-    return (False, taken, photo.path)
+    return taken
+
+
+def sort_key(photo: Photo) -> tuple:
+    """Order by capture time; undated photos go last."""
+    if photo.taken is None:
+        return (True, datetime.min, photo.path)
+    return (False, comparable_time(photo), photo.path)
+
+
+def distance_meters(first: Photo, second: Photo) -> float:
+    """Return the great-circle distance between two photos."""
+    latitude1, latitude2 = math.radians(first.latitude), math.radians(second.latitude)
+    half_dlat = (latitude2 - latitude1) / 2
+    half_dlon = math.radians(second.longitude - first.longitude) / 2
+    a = (
+        math.sin(half_dlat) ** 2
+        + math.cos(latitude1) * math.cos(latitude2) * math.sin(half_dlon) ** 2
+    )
+    return 2 * EARTH_RADIUS_METERS * math.asin(math.sqrt(a))
+
+
+def simplify_path(photos: list, min_seconds: float, min_meters: float) -> list:
+    """Drop dated photos closer to the last kept one than either threshold."""
+    kept = photos[:1]
+    for photo in photos[1:]:
+        seconds = (comparable_time(photo) - comparable_time(kept[-1])).total_seconds()
+        if seconds >= min_seconds and distance_meters(kept[-1], photo) >= min_meters:
+            kept.append(photo)
+    return kept
 
 
 def format_coordinates(photo: Photo) -> str:
@@ -225,7 +253,28 @@ def parse_args(argv=None) -> argparse.Namespace:
     path.add_argument(
         "--path-only", action="store_true", help="draw the line without the placemarks"
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "-s",
+        "--simplify",
+        action="store_true",
+        help="leave out of the path pictures too close in time or space to the last one kept",
+    )
+    parser.add_argument(
+        "--min-seconds",
+        type=float,
+        default=10,
+        help="with --simplify, minimum time between path points (default: 10)",
+    )
+    parser.add_argument(
+        "--min-meters",
+        type=float,
+        default=10,
+        help="with --simplify, minimum distance between path points (default: 10)",
+    )
+    args = parser.parse_args(argv)
+    if args.simplify and not (args.path or args.path_only):
+        parser.error("--simplify needs --path or --path-only")
+    return args
 
 
 def main(argv=None) -> int:
@@ -270,11 +319,15 @@ def main(argv=None) -> int:
     if args.path or args.path_only:
         # Undated pictures have no known position in the sequence.
         path_photos = [photo for photo in photos if photo.taken]
-        if len(path_photos) < 2:
-            print("error: a path needs at least 2 pictures with a date", file=sys.stderr)
-            return 1
         if len(path_photos) < len(photos):
             print(f"{len(photos) - len(path_photos)} undated pictures left out of the path")
+        if args.simplify:
+            dated = len(path_photos)
+            path_photos = simplify_path(path_photos, args.min_seconds, args.min_meters)
+            print(f"path simplified from {dated} to {len(path_photos)} pictures")
+        if len(path_photos) < 2:
+            print("error: a path needs at least 2 separate dated pictures", file=sys.stderr)
+            return 1
 
     output = args.output or directory / "photos.kml"
     tree = build_kml(

@@ -72,6 +72,9 @@ The same trip, numbered in the order the pictures were taken:
 | `-t`, `--title TEXT` | Document title (default: the directory name) |
 | `-p`, `--path` | Also draw a line through the pictures in capture order |
 | `--path-only` | Draw the line without the individual placemarks |
+| `-s`, `--simplify` | Leave out of the path pictures too close to the last one kept |
+| `--min-seconds N` | With `--simplify`, minimum time between path points (default: 10) |
+| `--min-meters N` | With `--simplify`, minimum distance between path points (default: 10) |
 
 For example, to process a folder and all its subfolders and write the result
 somewhere else:
@@ -90,9 +93,21 @@ The line joins the pictures with straight segments in capture order, so it shows
 where you took pictures rather than the exact way you travelled. Pictures without
 a capture date are left out of it, because their place in the sequence is unknown.
 
+Bursts of pictures and long stops add many points in nearly the same place. To
+leave them out of the line, add `--simplify`:
+
+```bash
+python picture2kml.py ~/Pictures/mallorca-trip --path --simplify --min-meters 25
+```
+
+A picture stays on the path only if it was taken at least 10 seconds and at least
+10 metres from the last picture kept, or whatever `--min-seconds` and
+`--min-meters` specify. This only changes the line: with `--path`, every picture
+still has its placemark.
+
 The exit status is 0 on success, 1 if nothing could be written (no geotagged
-pictures, or fewer than 2 dated pictures for a path), and 2 if the directory does
-not exist.
+pictures, or fewer than 2 separate dated pictures for a path), and 2 if the
+directory does not exist or the options are invalid.
 
 ## What the KML contains
 
