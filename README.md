@@ -60,4 +60,8 @@ python -m unittest
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE). If you redistribute this software or a work based
+on it, you must keep the attribution in [NOTICE](NOTICE).
+
+If you use it in academic or published work, please cite it using
+[CITATION.cff](CITATION.cff), or the "Cite this repository" button on GitHub.
